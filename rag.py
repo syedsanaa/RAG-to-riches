@@ -4,13 +4,12 @@ import pandas as pd
 def load_data(news_path: str, market_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
      1)We are merging the news and market data based on date because 
-    we want to see for a particular date based on the sentiment 
-    today what was the effect on Market tomorrow.
+    we want to see how sentiment affects market prices on daily basis
     2)We are assuming that for a date there are multiple rows in 
     the news data and one row in the markets data
     Returns:
-        merged_df  — news rows with market data broadcast across (N:1)
-        market_df  — one row per date, for use in aggregate_by_date
+        merged_df  — for one date we have averaged sentiment values 
+        news_df  — returning this to preserve all the news data for further analysis
     """
     news_df = pd.read_csv(news_path, parse_dates=["date"])
     market_df = pd.read_csv(market_path, parse_dates=["date"])
@@ -18,6 +17,7 @@ def load_data(news_path: str, market_path: str) -> tuple[pd.DataFrame, pd.DataFr
     news_df["date"] = news_df["date"].dt.normalize()
     market_df["date"] = market_df["date"].dt.normalize()
     market_df = market_df.sort_values("date")
+    # So we shift the date by one because for a date we have sentiment data and we want to see how it affects market prices next day
     market_df["spy_up_next1d"] = (market_df["spy_return_1d"].shift(-1) > 0).astype(int)
     assert market_df["date"].is_unique, (
         f"market_prices.csv has duplicate dates: "
@@ -34,3 +34,25 @@ def load_data(news_path: str, market_path: str) -> tuple[pd.DataFrame, pd.DataFr
 
     return merged, news_df
 
+ 
+def topic_sentiment_features(news_df: pd.DataFrame, merged: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each date, compute average sentiment per topic.
+    Returns one row per date with columns: one per topic + spy_up_next1d as target.
+    
+    Why: instead of one avg sentiment signal per day, we get 7 (one per topic).
+    This lets logistic regression tell us WHICH topic predicts market direction best.
+    """
+    # average compound score per date per topic
+    topic_daily = (
+        news_df.groupby(["date", "topic"])["compound"]
+        .mean()
+        .unstack(fill_value=0)  # topics become columns, missing = 0
+    )
+    topic_daily.columns = [f"sent_{col}" for col in topic_daily.columns]
+    topic_daily = topic_daily.reset_index()
+
+    # merge with merged (which has spy_up_next1d) on date
+    feature_df = pd.merge(topic_daily, merged[["date", "spy_up_next1d"]], on="date", how="inner")
+
+    return feature_df
